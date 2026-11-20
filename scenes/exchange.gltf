@@ -1,0 +1,483 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "usdgltf-bridge 0.1.0"
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "exchange-fixture",
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "World",
+      "children": [
+        1,
+        2
+      ]
+    },
+    {
+      "name": "Ground",
+      "mesh": 0
+    },
+    {
+      "name": "Assembly",
+      "translation": [
+        0,
+        1.5,
+        0
+      ],
+      "rotation": [
+        0,
+        0.087156,
+        0,
+        0.996195
+      ],
+      "scale": [
+        1,
+        0.5,
+        1
+      ],
+      "children": [
+        3,
+        5
+      ]
+    },
+    {
+      "name": "Posts",
+      "translation": [
+        0,
+        1,
+        5
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "scale": [
+        0.4,
+        1,
+        1
+      ],
+      "children": [
+        4
+      ]
+    },
+    {
+      "name": "PostInstances",
+      "mesh": 1,
+      "extensions": {
+        "EXT_mesh_gpu_instancing": {
+          "attributes": {
+            "TRANSLATION": 8,
+            "ROTATION": 9,
+            "SCALE": 10
+          }
+        }
+      },
+      "extras": {
+        "usdgltf": {
+          "kind": "instance-set",
+          "instanceSet": "is2",
+          "encoding": "instanceable",
+          "prototypePath": "/_Prototypes/Post",
+          "sourcePaths": [
+            "/World/Assembly/Posts/Post_0",
+            "/World/Assembly/Posts/Post_1"
+          ],
+          "mirroredInstances": 0,
+          "mirrorPolicy": "negative-determinant instance matrices are retained verbatim; three.js flips winding per object, not per instance, so no renderer is assumed to flip a mirrored instance; every instance in this set has a positive determinant, so single-sided materials keep their authored facing",
+          "mirrorFix": null
+        }
+      }
+    },
+    {
+      "name": "PanelInstances",
+      "mesh": 2,
+      "extensions": {
+        "EXT_mesh_gpu_instancing": {
+          "attributes": {
+            "TRANSLATION": 15,
+            "ROTATION": 16,
+            "SCALE": 17
+          }
+        }
+      },
+      "extras": {
+        "usdgltf": {
+          "kind": "instance-set",
+          "instanceSet": "is1",
+          "encoding": "instanceable",
+          "prototypePath": "/_Prototypes/Panel",
+          "sourcePaths": [
+            "/World/Assembly/Panel_0",
+            "/World/Assembly/Panel_1",
+            "/World/Assembly/Panel_2",
+            "/World/Assembly/Panel_3"
+          ],
+          "mirroredInstances": 1,
+          "mirrorPolicy": "negative-determinant instance matrices are retained verbatim; three.js flips winding per object, not per instance, so no renderer is assumed to flip a mirrored instance; every instance in this set has a positive determinant, so single-sided materials keep their authored facing",
+          "mirrorFix": null
+        }
+      }
+    }
+  ],
+  "meshes": [
+    {
+      "name": "Ground",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2
+          },
+          "mode": 4,
+          "indices": 3,
+          "material": 0
+        }
+      ]
+    },
+    {
+      "name": "Post",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 4,
+            "NORMAL": 5,
+            "TEXCOORD_0": 6
+          },
+          "mode": 4,
+          "indices": 7,
+          "material": 1
+        }
+      ]
+    },
+    {
+      "name": "Panel",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 11,
+            "NORMAL": 12,
+            "TEXCOORD_0": 13
+          },
+          "mode": 4,
+          "indices": 14,
+          "material": 2
+        }
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "name": "GroundGreen",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.2,
+          0.75,
+          0.3,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.8
+      },
+      "alphaMode": "OPAQUE",
+      "doubleSided": true
+    },
+    {
+      "name": "PostBlue",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.2,
+          0.35,
+          0.85,
+          1
+        ],
+        "metallicFactor": 0.2,
+        "roughnessFactor": 0.5
+      },
+      "alphaMode": "OPAQUE"
+    },
+    {
+      "name": "PanelRed",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.85,
+          0.2,
+          0.2,
+          1
+        ],
+        "metallicFactor": 0.1,
+        "roughnessFactor": 0.4
+      },
+      "alphaMode": "OPAQUE"
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC3",
+      "min": [
+        -12,
+        0,
+        -12
+      ],
+      "max": [
+        12,
+        0,
+        12
+      ]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 3,
+      "componentType": 5125,
+      "count": 6,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 4,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3",
+      "min": [
+        -0.20000000298023224,
+        -2,
+        -0.20000000298023224
+      ],
+      "max": [
+        0.20000000298023224,
+        2,
+        0.20000000298023224
+      ]
+    },
+    {
+      "bufferView": 5,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 6,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 7,
+      "componentType": 5125,
+      "count": 36,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 8,
+      "componentType": 5126,
+      "count": 2,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 9,
+      "componentType": 5126,
+      "count": 2,
+      "type": "VEC4"
+    },
+    {
+      "bufferView": 10,
+      "componentType": 5126,
+      "count": 2,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 11,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3",
+      "min": [
+        -1,
+        -0.5,
+        -0.5
+      ],
+      "max": [
+        1,
+        0.5,
+        0.5
+      ]
+    },
+    {
+      "bufferView": 12,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 13,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 14,
+      "componentType": 5125,
+      "count": 36,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 15,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 16,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC4"
+    },
+    {
+      "bufferView": 17,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC3"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 48,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 48,
+      "byteLength": 48,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 96,
+      "byteLength": 32,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 128,
+      "byteLength": 24,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 152,
+      "byteLength": 288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 440,
+      "byteLength": 288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 728,
+      "byteLength": 192,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 920,
+      "byteLength": 144,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 1064,
+      "byteLength": 24,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 1088,
+      "byteLength": 32,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 1120,
+      "byteLength": 24,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 1144,
+      "byteLength": 288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 1432,
+      "byteLength": 288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 1720,
+      "byteLength": 192,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 1912,
+      "byteLength": 144,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 2056,
+      "byteLength": 48,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 2104,
+      "byteLength": 64,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 2168,
+      "byteLength": 48,
+      "target": 34962
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 2216,
+      "uri": "data:application/octet-stream;base64,AABAwQAAAAAAAEDBAABAQQAAAAAAAEDBAABAQQAAAAAAAEBBAABAwQAAAAAAAEBBAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAgD8AAIA/AAAAAAAAgD8AAAAAAQAAAAIAAAAAAAAAAgAAAAMAAADNzEy+AAAAwM3MTL7NzEw+AAAAwM3MTL7NzEw+AAAAQM3MTL7NzEy+AAAAQM3MTL7NzEy+AAAAwM3MTD7NzEy+AAAAQM3MTD7NzEw+AAAAQM3MTD7NzEw+AAAAwM3MTD7NzEy+AAAAwM3MTL7NzEy+AAAAQM3MTL7NzEy+AAAAQM3MTD7NzEy+AAAAwM3MTD7NzEw+AAAAwM3MTL7NzEw+AAAAwM3MTD7NzEw+AAAAQM3MTD7NzEw+AAAAQM3MTL7NzEy+AAAAwM3MTL7NzEy+AAAAwM3MTD7NzEw+AAAAwM3MTD7NzEw+AAAAwM3MTL7NzEy+AAAAQM3MTL7NzEw+AAAAQM3MTL7NzEw+AAAAQM3MTD7NzEy+AAAAQM3MTD4AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAACAPwAAgD8AAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAIA/AACAPwAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAgD8AAIA/AAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAACAPwAAgD8AAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAIA/AACAPwAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAgD8AAIA/AAAAAAAAgD8AAAAAAQAAAAIAAAAAAAAAAgAAAAMAAAAEAAAABQAAAAYAAAAEAAAABgAAAAcAAAAIAAAACQAAAAoAAAAIAAAACgAAAAsAAAAMAAAADQAAAA4AAAAMAAAADgAAAA8AAAAQAAAAEQAAABIAAAAQAAAAEgAAABMAAAAUAAAAFQAAABYAAAAUAAAAFgAAABcAAAAAAADAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgL8AAAC/AAAAvwAAgD8AAAC/AAAAvwAAgD8AAAA/AAAAvwAAgL8AAAA/AAAAvwAAgL8AAAC/AAAAPwAAgL8AAAA/AAAAPwAAgD8AAAA/AAAAPwAAgD8AAAC/AAAAPwAAgL8AAAC/AAAAvwAAgL8AAAA/AAAAvwAAgL8AAAA/AAAAPwAAgL8AAAC/AAAAPwAAgD8AAAC/AAAAvwAAgD8AAAC/AAAAPwAAgD8AAAA/AAAAPwAAgD8AAAA/AAAAvwAAgL8AAAC/AAAAvwAAgL8AAAC/AAAAPwAAgD8AAAC/AAAAPwAAgD8AAAC/AAAAvwAAgL8AAAA/AAAAvwAAgD8AAAA/AAAAvwAAgD8AAAA/AAAAPwAAgL8AAAA/AAAAPwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAACAPwAAAAAAAIA/AACAPwAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAgD8AAIA/AAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAACAPwAAgD8AAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAIA/AACAPwAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAgD8AAIA/AAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAACAPwAAgD8AAAAAAACAPwAAAAABAAAAAgAAAAAAAAACAAAAAwAAAAQAAAAFAAAABgAAAAQAAAAGAAAABwAAAAgAAAAJAAAACgAAAAgAAAAKAAAACwAAAAwAAAANAAAADgAAAAwAAAAOAAAADwAAABAAAAARAAAAEgAAABAAAAASAAAAEwAAABQAAAAVAAAAFgAAABQAAAAWAAAAFwAAAAAAQMAAAAAAAAAAAAAAQEAAAAAAAAAAAAAAAAAAAAAAAABAQAAAAAAAAAAAAABAwAAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAABz2mT4AAAAAyyZ0PwAAAAAAAAAAAAAAgAAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIC/AACAPwAAgD8="
+    }
+  ],
+  "extensionsUsed": [
+    "EXT_mesh_gpu_instancing"
+  ],
+  "extensionsRequired": []
+}

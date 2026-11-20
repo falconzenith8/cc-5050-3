@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>glTF ↔ USD scene exchange — declared subset</title>
+  <link rel="stylesheet" href="/src/ui/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <strong>glTF ⇄ USD</strong>
+      <span class="sub">scene exchange · declared subset · two real loaders</span>
+    </div>
+    <div class="topbar-actions">
+      <label class="field">
+        <span>Source</span>
+        <select id="source-format">
+          <option value="gltf">glTF 2.0 (.gltf)</option>
+          <option value="usda">USDA (.usda)</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>File</span>
+        <select id="source-file"></select>
+      </label>
+      <label class="field" id="gltf-frame" hidden>
+        <span>glTF frame</span>
+        <select id="source-frame">
+          <option value="Y">Y-up, metres</option>
+          <option value="Z">Z-up, centimetres</option>
+        </select>
+      </label>
+      <label class="check" id="zup-export" hidden>
+        <input type="checkbox" id="target-zup" />
+        <span>export USD as Z-up cm</span>
+      </label>
+      <button id="convert" class="primary">Convert &amp; compare</button>
+      <button id="download" class="ghost" disabled>Download outputs</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel panel-left">
+      <div class="panel-head">
+        <h2>Source hierarchy</h2>
+        <span class="tag" id="source-tag">—</span>
+      </div>
+      <div class="hierarchy" id="source-tree" aria-live="polite"></div>
+
+      <div class="panel-head">
+        <h2>Instance sets &amp; resource reuse</h2>
+      </div>
+      <div class="reuse" id="source-reuse"></div>
+
+      <div class="panel-head">
+        <h2>Materials</h2>
+      </div>
+      <div class="materials" id="source-materials"></div>
+    </section>
+
+    <section class="stage">
+      <div class="viewport-wrap">
+        <div class="viewport-head">
+          <h2 id="vp-title">Source · three.js GLTFLoader</h2>
+          <div class="viewport-buttons" id="loader-buttons"></div>
+        </div>
+        <div class="viewport" id="viewport"></div>
+      </div>
+      <div class="viewport-wrap">
+        <div class="viewport-head">
+          <h2 id="vp2-title">Target · lightusd</h2>
+          <div class="viewport-buttons" id="loader-buttons-2"></div>
+        </div>
+        <div class="viewport" id="viewport-2"></div>
+      </div>
+    </section>
+
+    <section class="panel panel-right">
+      <div class="panel-head">
+        <h2>Target hierarchy</h2>
+        <span class="tag" id="target-tag">—</span>
+      </div>
+      <div class="hierarchy" id="target-tree" aria-live="polite"></div>
+
+      <div class="panel-head">
+        <h2>Results</h2>
+        <span class="verdict" id="verdict">not run</span>
+      </div>
+      <div class="results" id="results">
+        <p class="muted">Choose a source file and press <strong>Convert &amp; compare</strong>.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="statusbar">
+    <span id="status">ready</span>
+  </footer>
+
+  <script type="module" src="/src/ui/app.js"></script>
+</body>
+</html>

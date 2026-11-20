@@ -1,0 +1,26 @@
+{
+  "name": "usdgltf-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Declared-subset glTF <-> USD scene exchange with two real loaders, instance preservation and auditable reports.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 4173 --strictPort",
+    "test": "node --test tests/core/",
+    "test:e2e": "node tests/e2e/run-e2e.mjs",
+    "verify": "npm run test && npm run test:e2e",
+    "scenes": "node tools/build-scenes.mjs",
+    "cli": "node cli/exchange.mjs"
+  },
+  "dependencies": {
+    "@openusd-wasm/three-loader": "0.0.17",
+    "lightusd": "1.0.0",
+    "three": "0.180.0"
+  },
+  "devDependencies": {
+    "playwright": "^1.58.0",
+    "vite": "^7.1.0"
+  }
+}
