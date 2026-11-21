@@ -26,3 +26,6 @@ __pycache__/
 
 # e2e output is generated evidence; keep it out of history but on disk
 tests/e2e/artifacts/
+
+# local investigation scratch
+.scratch/

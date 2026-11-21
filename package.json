@@ -8,10 +8,11 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview --port 4173 --strictPort",
-    "test": "node --test tests/core/",
+    "test": "node --test tests/core/*.test.mjs",
     "test:e2e": "node tests/e2e/run-e2e.mjs",
     "verify": "npm run test && npm run test:e2e",
-    "scenes": "node tools/build-scenes.mjs",
+    "verify:override": "node tools/verify-override-loaders.mjs",
+    "scenes": "node tools/build-scenes.mjs && node tools/build-override-scenes.mjs",
     "cli": "node cli/exchange.mjs"
   },
   "dependencies": {

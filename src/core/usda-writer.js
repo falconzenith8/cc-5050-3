@@ -42,6 +42,14 @@ export function writeUsda(scene, { upAxis = null, metersPerUnit = null, rootName
   const usedPaths = new Set();
   const pathByNode = new Map();
   const prototypes = collectPrototypes();
+  // Material-override variants. Each entry references the base prototype and
+  // re-binds only the prototype's Mesh through an `over`, so the geometry stays
+  // authored exactly once (verified against @openusd-wasm/three-loader).
+  const overridePrototypes = collectOverridePrototypes(prototypes);
+  // Override materials referenced by `over`-variant prototypes are stage-root
+  // prims so the bindings resolve regardless of where the variant lives. They
+  // are registered while the prototype library is assembled below, then flushed.
+  const stageRootMaterials = [];
 
   const out = [];
   writeHeader(out, { rootName: primary, axis, unit });
@@ -70,9 +78,11 @@ export function writeUsda(scene, { upAxis = null, metersPerUnit = null, rootName
     out.push(`class Xform "${PROTOTYPE_ROOT}"`);
     out.push('{');
     for (const proto of prototypes) writePrototype(out, proto, INDENT);
+    for (const variant of overridePrototypes) writeOverridePrototype(out, variant, INDENT);
     out.push('}');
     out.push('');
   }
+  flushStageRootMaterials(out);
 
   return { text: out.join('\n'), warnings, upAxis: axis, metersPerUnit: unit, prototypes };
 
@@ -85,13 +95,20 @@ export function writeUsda(scene, { upAxis = null, metersPerUnit = null, rootName
     pathByNode.set(node.id, path);
 
     // USD instanceable form: the node *is* a placement referencing a class
-    // prototype. Its own local is the placement transform.
+    // prototype. Its own local is the placement transform. A per-placement
+    // material override selects an `over`-variant prototype; the base
+    // prototype's geometry bytes are still the only authored copy.
     if (node.instanceOf) {
-      const proto = prototypes.find((p) => p.set.id === (node.instanceSetIds || [])[0]);
+      const setId = (node.instanceSetIds || [])[0];
+      const proto = prototypes.find((p) => p.set.id === setId);
+      const variant = node.overrides?.material
+        ? overridePrototypes.find((v) => v.set.id === setId && v.materialId === node.overrides.material)
+        : null;
+      const reference = variant || proto;
       target.push(`${indent}def Xform "${name}" (`);
-      if (proto) {
+      if (reference) {
         target.push(`${indent}${INDENT}instanceable = true`);
-        target.push(`${indent}${INDENT}prepend references = <${proto.path}>`);
+        target.push(`${indent}${INDENT}prepend references = <${reference.path}>`);
       }
       target.push(`${indent})`);
       target.push(`${indent}{`);
@@ -125,14 +142,7 @@ export function writeUsda(scene, { upAxis = null, metersPerUnit = null, rootName
         const placements = hostPlacements(set);
         placements.forEach((placementMatrix, k) => {
           const placementName = uniqueName(path, `${name}_${k}`);
-          target.push(`${inner}def Xform "${placementName}" (`);
-          target.push(`${inner}${INDENT}instanceable = true`);
-          target.push(`${inner}${INDENT}prepend references = <${proto.path}>`);
-          target.push(`${inner})`);
-          target.push(`${inner}{`);
-          writeXformOps(target, inner + INDENT, placementMatrix);
-          target.push(`${inner}}`);
-          target.push('');
+          writePlacementPrim(target, inner, set, placementName, placementMatrix, set.transformOverrides[k]?.material || null);
         });
         target.push(`${indent}}`);
         target.push('');
@@ -159,16 +169,36 @@ export function writeUsda(scene, { upAxis = null, metersPerUnit = null, rootName
       set.transforms.forEach((t, k) => {
         const row = set.rows[0];
         const placementName = uniqueName(path, `${sanitize(set.name)}_${k}`);
-        target.push(`${inner}def Xform "${placementName}" (`);
-        target.push(`${inner}${INDENT}instanceable = true`);
-        target.push(`${inner}${INDENT}prepend references = <${proto.path}>`);
-        target.push(`${inner})`);
-        target.push(`${inner}{`);
-        writeXformOps(target, inner + INDENT, multiply(t, row?.matrix || IDENTITY_MATRIX));
-        target.push(`${inner}}`);
-        target.push('');
+        writePlacementPrim(
+          target, inner, set, placementName,
+          multiply(t, row?.matrix || IDENTITY_MATRIX),
+          set.transformOverrides[k]?.material || null,
+        );
       });
     }
+    target.push(`${indent}}`);
+    target.push('');
+  }
+
+  /**
+   * One instanceable placement prim. With an override material it references
+   * the `over`-variant prototype instead of the base one; either way no
+   * geometry is authored at the placement.
+   */
+  function writePlacementPrim(target, indent, set, placementName, placementMatrix, overrideMaterialId) {
+    const base = prototypes.find((p) => p.set.id === set.id);
+    const variant = overrideMaterialId
+      ? overridePrototypes.find((v) => v.set.id === set.id && v.materialId === overrideMaterialId)
+      : null;
+    const reference = variant || base;
+    target.push(`${indent}def Xform "${placementName}" (`);
+    if (reference) {
+      target.push(`${indent}${INDENT}instanceable = true`);
+      target.push(`${indent}${INDENT}prepend references = <${reference.path}>`);
+    }
+    target.push(`${indent})`);
+    target.push(`${indent}{`);
+    writeXformOps(target, indent + INDENT, placementMatrix);
     target.push(`${indent}}`);
     target.push('');
   }
@@ -236,6 +266,94 @@ export function writeUsda(scene, { upAxis = null, metersPerUnit = null, rootName
     target.push(`${inner}}`);
     target.push(`${indent}}`);
     target.push('');
+  }
+
+  /**
+   * One variant per (instance set, override material). A variant references the
+   * base class prototype and only overrides the Mesh's material binding through
+   * an `over`: no points, normals or indices are authored a second time. The
+   * variant's material is authored at stage root so every variant can reach it.
+   */
+  function collectOverridePrototypes(basePrototypes) {
+    const variants = [];
+    const seen = new Set();
+    const consider = (setId, materialId) => {
+      const key = `${setId}|${materialId}`;
+      if (!materialId || seen.has(key)) return;
+      seen.add(key);
+      const base = basePrototypes.find((p) => p.set.id === setId);
+      if (!base) return;
+      const mat = matById.get(materialId);
+      if (!mat) return;
+      const n = variants.length;
+      const variantName = uniqueVariantName(base, n, mat);
+      variants.push({
+        set: base.set,
+        base,
+        materialId,
+        material: mat,
+        name: variantName,
+        path: `/${PROTOTYPE_ROOT}/${variantName}`,
+      });
+    };
+    for (const node of scene.nodes) {
+      if (node.instanceOf && node.overrides?.material) {
+        for (const setId of node.instanceSetIds || []) consider(setId, node.overrides.material);
+      }
+    }
+    for (const set of scene.instanceSets) {
+      for (const ov of set.transformOverrides || []) {
+        if (ov?.material) consider(set.id, ov.material);
+      }
+    }
+    return variants;
+  }
+
+  function uniqueVariantName(base, n, mat) {
+    let candidate;
+    let k = n;
+    do {
+      candidate = `${base.path.split('/').pop()}_${sanitize(mat.name || 'Mat')}${k === 0 ? '' : `_${k}`}`;
+      k++;
+    } while (usedPaths.has(`/${PROTOTYPE_ROOT}/${candidate}`));
+    usedPaths.add(`/${PROTOTYPE_ROOT}/${candidate}`);
+    return candidate;
+  }
+
+  function writeOverridePrototype(target, variant, indent) {
+    const inner = indent + INDENT;
+    const mesh = meshById.get(variant.set.mesh);
+    const meshChildName = sanitize(mesh.name || 'Geo');
+    const matPath = `/${sanitize(variant.material.name || 'Material')}`;
+    target.push(`${indent}class Xform "${variant.path.split('/').pop()}" (`);
+    target.push(`${indent}${INDENT}prepend references = <${variant.base.path}>`);
+    target.push(`${indent})`);
+    target.push(`${indent}{`);
+    target.push(`${inner}over Mesh "${meshChildName}"`);
+    target.push(`${inner}{`);
+    target.push(`${inner}${INDENT}rel material:binding = <${matPath}>`);
+    target.push(`${inner}}`);
+    target.push(`${indent}}`);
+    target.push('');
+    // The override material is authored at stage root so the variant's binding
+    // resolves (class prims under _Prototypes do not draw it themselves).
+    if (!usedPaths.has(matPath)) {
+      usedPaths.add(matPath);
+      writeStageRootMaterial(variant.material, matPath);
+    }
+  }
+
+  function writeStageRootMaterial(mat, matPath) {
+    if (!stageRootMaterials.some((e) => e.matPath === matPath)) {
+      stageRootMaterials.push({ mat, matPath });
+    }
+  }
+
+  function flushStageRootMaterials(outLines) {
+    for (const { mat, matPath } of stageRootMaterials) {
+      writeMaterial(outLines, mat, '', matPath);
+      outLines.push('');
+    }
   }
 
   // ---- geometry ----------------------------------------------------------

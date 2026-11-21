@@ -14,10 +14,12 @@ import { buildWith, disposeObject, LOADER_LIMITS } from '../render/loaders.js';
 const SCENE_FILES = {
   gltf: [
     { label: 'exchange.gltf', url: '/scenes/exchange.gltf', name: 'exchange.gltf' },
+    { label: 'override.gltf (shared mesh, material override)', url: '/scenes/override.gltf', name: 'override.gltf' },
   ],
   usda: [
     { label: 'exchange-yup.usda (Y-up, m)', url: '/scenes/exchange-yup.usda', name: 'exchange-yup.usda' },
     { label: 'exchange-zup.usda (Z-up, cm)', url: '/scenes/exchange-zup.usda', name: 'exchange-zup.usda' },
+    { label: 'override.usda (shared mesh, material override)', url: '/scenes/override.usda', name: 'override.usda' },
   ],
 };
 

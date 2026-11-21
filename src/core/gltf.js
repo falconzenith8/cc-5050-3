@@ -95,6 +95,11 @@ export function readGltf(json, { sourceName = 'scene.gltf' } = {}) {
   }
 
   const meshes = new Map();
+  // glTF mesh primitives that draw the same POSITION accessor are one physical
+  // geometry resource (e.g. a material-only override). They get distinct IR
+  // mesh objects so each can carry its own material, but one shared resourceKey
+  // so sharing statistics and lineage treat the bytes as authored once.
+  const resourceKeyByAccessor = new Map();
   function readMesh(i, primitiveIndex = 0) {
     const key = `${i}:${primitiveIndex}`;
     if (meshes.has(key)) return meshes.get(key);
@@ -118,6 +123,10 @@ export function readGltf(json, { sourceName = 'scene.gltf' } = {}) {
     });
     mesh.material = readMaterial(prim.material)?.id ?? null;
     mesh.sourcePath = `meshes/${i}/primitives/${primitiveIndex}`;
+    if (!resourceKeyByAccessor.has(prim.attributes.POSITION)) {
+      resourceKeyByAccessor.set(prim.attributes.POSITION, `key-gltf-accessor-${prim.attributes.POSITION}`);
+    }
+    mesh.resourceKey = resourceKeyByAccessor.get(prim.attributes.POSITION);
     for (const attr of Object.keys(prim.attributes)) {
       if (!['POSITION', 'NORMAL', 'TEXCOORD_0'].includes(attr)) {
         warnings.push({ message: `mesh '${mesh.name}': attribute ${attr} outside the declared subset was dropped`, layer: sourceName });
@@ -185,18 +194,47 @@ export function readGltf(json, { sourceName = 'scene.gltf' } = {}) {
               scale: readInstanceAttr(ext, 'SCALE', k, [1, 1, 1]),
             });
             set.transforms.push(local);
+            set.transformOverrides.push({ material: null });
             set.sourcePaths.push(node.sourcePath);
             if (determinant3(local) < 0) set.mirroredCount++;
           }
           scene.instanceSets.push(set);
           node.instanceSetIds = [set.id];
           node.visible = def.extras?.usdgltf?.visible !== false;
+          // Material-override placements were split into sibling mesh nodes
+          // that reuse the same geometry accessors. Fold them back into this
+          // set as per-transform material overrides, keyed by the placement
+          // indices the writer recorded; their mesh objects keep the same
+          // resourceKey because they point at one accessor set.
+          const remainingChildren = foldOverrideChildren(def, node, set);
+          for (const c of remainingChildren) buildNode(c, node, node.sourcePath);
+          return node;
         }
         for (const c of def.children || []) buildNode(c, node, node.sourcePath);
         return node;
       }
-      const mesh = readMesh(def.mesh, 0);
-      if (mesh) node.mesh = mesh.id;
+      // A material-override placement produced by this tool: it draws the same
+      // geometry as its sibling instance set but carries its own material.
+      const overrideInfo = def.extras?.usdgltf?.kind === 'material-override-placement'
+        ? def.extras.usdgltf
+        : null;
+      if (overrideInfo && parentIr?.instanceSetIds?.length) {
+        attachOverridePlacement(def, node, parentIr, overrideInfo);
+        for (const c of def.children || []) buildNode(c, node, node.sourcePath);
+        return node;
+      }
+      const plainMesh = readMesh(def.mesh, 0);
+      if (plainMesh) node.mesh = plainMesh.id;
+    }
+    // Host Xform whose children are one shared InstancedMesh plus material-
+    // override sibling nodes (the writer's split for per-placement materials).
+    // Fold the siblings back into the instancing child's set so one set carries
+    // N transforms with per-transform overrides, instead of separate meshes.
+    if (def.children?.length && !def.mesh && !def.extensions?.EXT_mesh_gpu_instancing &&
+        def.children.some((c) => nodes[c]?.extras?.usdgltf?.kind === 'material-override-placement')) {
+      const remaining = foldHostOverrideChildren(def, node);
+      for (const c of remaining) buildNode(c, node, node.sourcePath);
+      return node;
     }
     for (const c of def.children || []) buildNode(c, node, node.sourcePath);
     return node;
@@ -212,6 +250,122 @@ export function readGltf(json, { sourceName = 'scene.gltf' } = {}) {
     if (idx === undefined) return fallback;
     const acc = readAccessor(idx);
     return Array.from(acc.data.slice(k * acc.numComp, k * acc.numComp + acc.numComp));
+  }
+
+  /**
+   * Material-override sibling nodes are folded back into the host's instance
+   * set as per-transform material overrides. The override node is removed from
+   * the scene tree: it is not a separate piece of geometry, only a different
+   * material opinion on one placement of the shared resource.
+   */
+  function foldOverrideChildren(hostDef, hostNode, set) {
+    const children = hostDef.children || [];
+    const removeIndices = [];
+    children.forEach((childJsonIndex, k) => {
+      const childDef = nodes[childJsonIndex];
+      const info = childDef?.extras?.usdgltf;
+      if (info?.kind !== 'material-override-placement') return;
+      const childMesh = readMesh(childDef.mesh, 0);
+      if (!childMesh) return;
+      const material = childMesh.material;
+      const local = compose({
+        translation: childDef.translation || [0, 0, 0],
+        rotation: childDef.rotation || [0, 0, 0, 1],
+        scale: childDef.scale || [1, 1, 1],
+      });
+      const indices = info.placementIndices && info.placementIndices.length
+        ? info.placementIndices
+        : [set.transforms.length];
+      for (const placementIndex of indices) {
+        // Prefer an authored slot; otherwise append the placement transform.
+        if (placementIndex < set.transforms.length) {
+          set.transformOverrides[placementIndex] = { material };
+        } else {
+          set.transforms.push(local);
+          set.transformOverrides.push({ material });
+          set.sourcePaths.push(`${hostNode.sourcePath}#${placementIndex}`);
+        }
+      }
+      removeIndices.push(k);
+    });
+    return children.filter((_, k) => !removeIndices.includes(k));
+  }
+
+  /**
+   * Fold a host Xform's split children — one shared InstancedMesh plus one or
+   * more material-override sibling nodes — back into the instancing child's
+   * set. The override siblings are consumed (not built as scene nodes): they
+   * only re-bind the material of a placement whose geometry is the shared
+   * accessor set. Returns the child indices that still need normal buildNode.
+   */
+  function foldHostOverrideChildren(hostDef, hostNode) {
+    const children = hostDef.children || [];
+    const instancedIndices = [];
+    const overrideIndices = [];
+    children.forEach((childJsonIndex, k) => {
+      const childDef = nodes[childJsonIndex];
+      const kind = childDef?.extras?.usdgltf?.kind;
+      if (childDef?.extensions?.EXT_mesh_gpu_instancing) instancedIndices.push(k);
+      else if (kind === 'material-override-placement') overrideIndices.push(k);
+    });
+    // Only fold the unambiguous shape: exactly one shared instancing child and
+    // at least one override sibling, with no other child kinds present.
+    if (instancedIndices.length !== 1 || overrideIndices.length === 0 ||
+        instancedIndices.length + overrideIndices.length !== children.length) {
+      return children.map((_, k) => k);
+    }
+    const instancedJsonIndex = children[instancedIndices[0]];
+    const instancedDef = nodes[instancedJsonIndex];
+    // Build the instancing child as its own node so its path and identity
+    // survive the fold; the folded set is attached there, not on the parent.
+    const innerNode = buildNode(instancedJsonIndex, hostNode, hostNode.sourcePath);
+    const set = scene.instanceSets.find((s) => s.id === innerNode?.instanceSetIds?.[0]);
+    if (!set) return children.map((_, k) => k);
+    const sharedMesh = scene.meshes.find((m) => m.id === set.mesh);
+    if (sharedMesh) set.resourceKey = sharedMesh.resourceKey;
+    const consumed = new Set([instancedIndices[0]]);
+    for (const k of overrideIndices) {
+      const childDef = nodes[children[k]];
+      const info = childDef.extras.usdgltf;
+      const overrideMesh = readMesh(childDef.mesh, 0);
+      if (overrideMesh) overrideMesh.resourceKey = set.resourceKey || overrideMesh.resourceKey;
+      const local = compose({
+        translation: childDef.translation || [0, 0, 0],
+        rotation: childDef.rotation || [0, 0, 0, 1],
+        scale: childDef.scale || [1, 1, 1],
+      });
+      const indices = info.placementIndices?.length ? info.placementIndices : [set.transforms.length];
+      for (const placementIndex of indices) {
+        if (placementIndex < set.transforms.length) {
+          set.transformOverrides[placementIndex] = { material: overrideMesh.material };
+        } else {
+          set.transforms.push(local);
+          set.transformOverrides.push({ material: overrideMesh.material });
+          set.sourcePaths.push(`${innerNode.sourcePath}#${placementIndex}`);
+        }
+      }
+      consumed.add(k);
+    }
+    return children.map((_, k) => k).filter((k) => !consumed.has(k));
+  }
+
+  /**
+   * An override placement read on its own (foreign or reordered file) is kept
+   * as a node but marked with the override relationship, so it never looks like
+   * independent geometry: its mesh shares the instance set's resourceKey.
+   */
+  function attachOverridePlacement(def, node, parentNode, info) {
+    const set = scene.instanceSets.find((s) => s.id === parentNode.instanceSetIds[0]);
+    const overrideMesh = readMesh(def.mesh, 0);
+    if (set && overrideMesh) {
+      overrideMesh.resourceKey = scene.meshes.find((m) => m.id === set.mesh)?.resourceKey || overrideMesh.resourceKey;
+      node.overrides = { material: overrideMesh.material };
+      node.materialOverrideOf = set.id;
+      node.placementIndices = info.placementIndices || [];
+      node.isOverridePlacement = true;
+    } else if (overrideMesh) {
+      node.mesh = overrideMesh.id;
+    }
   }
 
   const sceneIndex = json.scene ?? 0;
@@ -258,9 +412,15 @@ export function writeGltf(scene, { includeExtras = true, mirrorMitigation = true
 
   const meshesJson = [];
   const meshIndex = new Map();
-  function meshEntry(mesh, { doubleSided = false } = {}) {
-    const key = doubleSided ? `${mesh.id}#doubleSided` : mesh.id;
-    if (meshIndex.has(key)) return meshIndex.get(key);
+  // Geometry accessors are emitted once per physical resource and reused by
+  // every primitive that draws that mesh, so a material-only override (two IR
+  // mesh objects sharing one resourceKey) writes a second primitive referencing
+  // the same POSITION/NORMAL/indices accessors: the bytes are physically shared
+  // on disk, not merely equal.
+  const geometryAccessorCache = new Map();
+  function geometryAccessors(mesh) {
+    const cacheKey = mesh.resourceKey || mesh.id;
+    if (geometryAccessorCache.has(cacheKey)) return geometryAccessorCache.get(cacheKey);
     const position = Float32Array.from(mesh.positions);
     const min = [Infinity, Infinity, Infinity];
     const max = [-Infinity, -Infinity, -Infinity];
@@ -273,13 +433,30 @@ export function writeGltf(scene, { includeExtras = true, mirrorMitigation = true
     const attributes = { POSITION: pushAccessor(position, { type: 'VEC3', componentType: 5126, min, max, target: 34962 }) };
     if (mesh.normals) attributes.NORMAL = pushAccessor(Float32Array.from(mesh.normals), { type: 'VEC3', componentType: 5126, target: 34962 });
     if (mesh.uvs) attributes.TEXCOORD_0 = pushAccessor(Float32Array.from(mesh.uvs), { type: 'VEC2', componentType: 5126, target: 34962 });
+    const indices = mesh.indices ? pushAccessor(Uint32Array.from(mesh.indices), { type: 'SCALAR', componentType: 5125, target: 34963 }) : null;
+    const acc = { attributes, indices };
+    geometryAccessorCache.set(cacheKey, acc);
+    return acc;
+  }
+
+  function meshEntry(mesh, { doubleSided = false, materialOverride = null } = {}) {
+    // A material override produces a second glTF mesh primitive that points at
+    // the *same* geometry accessors: no position/normal/index bytes are
+    // authored twice, only the primitive's material index changes.
+    const key = materialOverride
+      ? `${mesh.id}#mat:${materialOverride}`
+      : doubleSided ? `${mesh.id}#doubleSided` : mesh.id;
+    if (meshIndex.has(key)) return meshIndex.get(key);
+    const { attributes, indices } = geometryAccessors(mesh);
     const primitive = { attributes, mode: 4 };
-    if (mesh.indices) {
-      const idx = Uint32Array.from(mesh.indices);
-      primitive.indices = pushAccessor(idx, { type: 'SCALAR', componentType: 5125, target: 34963 });
+    if (indices !== null) primitive.indices = indices;
+    if (materialOverride) {
+      const overrideMat = scene.materials.find((m) => m.id === materialOverride);
+      if (overrideMat) primitive.material = materialIndex(overrideMat, 'asAuthored');
+    } else {
+      const mat = scene.materials.find((m) => m.id === mesh.material);
+      if (mat) primitive.material = materialIndex(mat, doubleSided ? 'doubleSided' : 'asAuthored');
     }
-    const mat = scene.materials.find((m) => m.id === mesh.material);
-    if (mat) primitive.material = materialIndex(mat, doubleSided ? 'doubleSided' : 'asAuthored');
     meshesJson.push({ name: mesh.name, primitives: [primitive] });
     const index = meshesJson.length - 1;
     meshIndex.set(key, index);
@@ -375,35 +552,58 @@ export function writeGltf(scene, { includeExtras = true, mirrorMitigation = true
     // EXT-form hosts carry their own transforms (PointInstancer / gltf input).
     // A host with nothing but transforms becomes the instancing node itself, so
     // it maps back to one node; a host that also has a mesh or children keeps a
-    // separate instancing child.
+    // separate instancing child. Per-transform material overrides cannot be
+    // expressed on an InstancedMesh, so those placements are emitted as
+    // separate nodes whose mesh primitive reuses the same geometry accessors.
     const extSets = (node.instanceSetIds || [])
       .map((id) => scene.instanceSets.find((s) => s.id === id))
       .filter((s) => s && s.kind !== 'instanceable');
     if (extSets.length === 1 && !node.mesh && node.children.length === 0) {
-      const { meshIdx, mirrorFix } = instanceMeshEntry(extSets[0], mirrorMitigation);
-      def.mesh = meshIdx;
-      def.extensions = { EXT_mesh_gpu_instancing: { attributes: pushInstanceAccessors(extSets[0].transforms.length ? extSets[0].transforms : [IDENTITY_MATRIX]) } };
-      if (includeExtras) {
-        def.extras = {
-          usdgltf: {
-            kind: 'instance-set',
-            instanceSet: extSets[0].id,
-            encoding: extSets[0].kind,
-            prototypePath: extSets[0].prototypePath || null,
-            sourcePaths: extSets[0].sourcePaths,
-            mirroredInstances: mirroredCountOf(extSets[0]),
-            mirrorPolicy: mirrorPolicyText(mirrorFix),
-            mirrorFix,
-          },
-        };
+      const set = extSets[0];
+      const groups = splitByMaterialOverride(set);
+      if (groups.overrides.length === 0) {
+        const { meshIdx, mirrorFix } = instanceMeshEntry(set, mirrorMitigation);
+        def.mesh = meshIdx;
+        def.extensions = { EXT_mesh_gpu_instancing: { attributes: pushInstanceAccessors(set.transforms.length ? set.transforms : [IDENTITY_MATRIX]) } };
+        if (includeExtras) {
+          def.extras = {
+            usdgltf: {
+              kind: 'instance-set',
+              instanceSet: set.id,
+              encoding: set.kind,
+              prototypePath: set.prototypePath || null,
+              sourcePaths: set.sourcePaths,
+              mirroredInstances: mirroredCountOf(set),
+              mirrorPolicy: mirrorPolicyText(mirrorFix),
+              mirrorFix,
+            },
+          };
+        }
+        nodesJson.push(def);
+        return idx;
       }
+      // Overrides present: keep the host Xform (no mesh) with the shared
+      // InstancedMesh and one shared-accessor node per override placement.
+      const childIndices = [];
+      if (groups.shared.length) childIndices.push(emitInstancedNode(set, groups.shared, { name: node.name }));
+      for (const group of groups.overrides) childIndices.push(emitOverridePlacement(set, group));
+      def.children = childIndices;
+      nodesJson.push(def);
       return idx;
     }
-    for (const set of extSets) children.push(instancedNodeFor(node, set));
+    for (const set of extSets) {
+      const groups = splitByMaterialOverride(set);
+      if (groups.shared.length) children.push(instancedNodeFor(node, set, groups.shared));
+      for (const group of groups.overrides) children.push(emitOverridePlacement(set, group));
+    }
+    // A host node already emitted through extSets above (e.g. a PointInstancer)
+    // must not be emitted a second time when it appears in the child list.
+    const extSetIds = new Set(extSets.map((s) => s.id));
 
     // USD instanceable placements are nodes. All placements of one set that
     // share this parent collapse into a single instancing node with N
-    // transforms, instead of N single-instance nodes.
+    // transforms, instead of N single-instance nodes. Placements carrying a
+    // local material override are split into shared-accessor override nodes.
     const placementGroups = new Map();
     const placementsWithChildren = [];
     for (const childId of node.children) {
@@ -419,13 +619,41 @@ export function writeGltf(scene, { includeExtras = true, mirrorMitigation = true
         if (child.children.length) placementsWithChildren.push(child);
         continue;
       }
+      if ((child.instanceSetIds || []).some((id) => extSetIds.has(id))) continue;
+      // A child that itself hosts an EXT-form set emits its instancing node
+      // here; naming it after the child node keeps the single-host identity a
+      // recursive emitNode would produce and avoids authoring it twice.
+      const childExtSets = (child.instanceSetIds || [])
+        .map((id) => scene.instanceSets.find((s) => s.id === id))
+        .filter((s) => s && s.kind !== 'instanceable');
+      if (childExtSets.length) {
+        for (const set of childExtSets) {
+          const groups = splitByMaterialOverride(set);
+          if (groups.shared.length) children.push(emitInstancingNode(set, groups.shared, { name: child.name }));
+          for (const group of groups.overrides) children.push(emitOverridePlacement(set, group));
+        }
+        for (const grandchildId of child.children) {
+          const grandchild = scene.nodes.find((n) => n.id === grandchildId);
+          if (grandchild) {
+            const gc = emitNode(grandchild);
+            if (gc !== null) children.push(gc);
+          }
+        }
+        continue;
+      }
       const c = emitNode(child);
       if (c !== null) children.push(c);
     }
     for (const [setId, placements] of placementGroups) {
       const set = scene.instanceSets.find((s) => s.id === setId);
       if (!set) continue;
-      children.push(emitInstancingNode(set, placements));
+      const asEntry = (p) => ({ placement: p, transform: multiply(p.matrix, set.rows[0]?.matrix || IDENTITY_MATRIX) });
+      const plain = placements.filter((p) => !p.overrides?.material).map(asEntry);
+      const overridden = placements.filter((p) => p.overrides?.material);
+      if (plain.length) children.push(emitInstancingNode(set, plain));
+      for (const p of overridden) {
+        children.push(emitOverridePlacement(set, { entries: [asEntry(p)], material: p.overrides.material }));
+      }
     }
     for (const placement of placementsWithChildren) {
       children.push(emitNode(placement));
@@ -434,17 +662,80 @@ export function writeGltf(scene, { includeExtras = true, mirrorMitigation = true
     return idx;
   }
 
-  /** One EXT_mesh_gpu_instancing node for a group of USD placement nodes. */
-  function emitInstancingNode(set, placements) {
+  /**
+   * Split a host-form set into one shared group (no override) and one group
+   * per override material. Each entry keeps its original transform index so
+   * placement identity and order survive the split.
+   */
+  function splitByMaterialOverride(set) {
+    const shared = [];
+    const byMaterial = new Map();
+    set.transforms.forEach((transform, k) => {
+      const material = set.transformOverrides[k]?.material || null;
+      const entry = { index: k, transform };
+      if (!material) { shared.push(entry); return; }
+      if (!byMaterial.has(material)) byMaterial.set(material, []);
+      byMaterial.get(material).push(entry);
+    });
+    const overrides = [...byMaterial.entries()].map(([material, entries]) => ({ material, entries }));
+    return { shared, overrides };
+  }
+
+  /**
+   * A plain (non-instanced) node for one override placement. Its mesh primitive
+   * reuses the set geometry's accessors through `meshEntry(..., {
+   * materialOverride })`, so the geometry resource is physically shared while
+   * only the material binding differs.
+   */
+  function emitOverridePlacement(set, group) {
+    const mesh = scene.meshes.find((m) => m.id === set.mesh);
+    const meshIdx = meshEntry(mesh, { materialOverride: group.material });
+    const idx = nodesJson.length;
+    const first = group.entries[0];
+    const def = {
+      name: `${set.name || 'instances'}__override_${group.material}`,
+      mesh: meshIdx,
+    };
+    applyTransform(def, first.transform);
+    if (includeExtras) {
+      def.extras = {
+        usdgltf: {
+          kind: 'material-override-placement',
+          instanceSet: set.id,
+          materialOverride: group.material,
+          placementIndices: group.entries.map((e) => e.index),
+          geometryShared: true,
+          prototypePath: set.prototypePath || null,
+        },
+      };
+    }
+    // One node can only hold one transform; additional placements of the same
+    // override material become sibling nodes, all on the same shared mesh.
+    nodesJson.push(def);
+    for (const entry of group.entries.slice(1)) {
+      const extra = { name: `${def.name}_${entry.index}`, mesh: meshIdx };
+      applyTransform(extra, entry.transform);
+      if (includeExtras) extra.extras = def.extras;
+      nodesJson.push(extra);
+    }
+    return idx;
+  }
+
+  function applyTransform(def, matrix) {
+    const d = decompose(matrix);
+    if (d.translation.some((v) => Math.abs(v) > 1e-9)) def.translation = d.translation.map(round6);
+    def.rotation = d.rotation.map(round6);
+    def.scale = d.scale.map(round6);
+  }
+
+  /** One EXT_mesh_gpu_instancing node for a group of placement entries. */
+  function emitInstancingNode(set, entries, { name = null } = {}) {
     const { meshIdx, mirrorFix } = instanceMeshEntry(set, mirrorMitigation);
-    const row = set.rows[0]?.matrix || IDENTITY_MATRIX;
-    // Placements are siblings: their locals are relative to the same parent,
-    // and the prototype row is relative to the prototype root.
-    const transforms = placements.map((p) => multiply(p.matrix, row));
+    const transforms = entries.map((e) => e.transform);
     const attributes = pushInstanceAccessors(transforms);
     const idx = nodesJson.length;
     const def = {
-      name: set.name,
+      name: name || set.name,
       mesh: meshIdx,
       extensions: { EXT_mesh_gpu_instancing: { attributes } },
     };
@@ -455,7 +746,7 @@ export function writeGltf(scene, { includeExtras = true, mirrorMitigation = true
           instanceSet: set.id,
           encoding: 'instanceable',
           prototypePath: set.prototypePath || null,
-          sourcePaths: placements.map((p) => p.sourcePath),
+          sourcePaths: entries.map((e) => e.placement?.sourcePath).filter(Boolean),
           mirroredInstances: mirroredCountOf(set),
           mirrorPolicy: mirrorPolicyText(mirrorFix),
           mirrorFix,
@@ -466,10 +757,10 @@ export function writeGltf(scene, { includeExtras = true, mirrorMitigation = true
     return idx;
   }
 
-  function instancedNodeFor(node, set) {
+  function instancedNodeFor(node, set, entries = null) {
     const { meshIdx, mirrorFix } = instanceMeshEntry(set, mirrorMitigation);
-    const transforms = set.transforms.length ? set.transforms : [IDENTITY_MATRIX];
-    const attributes = pushInstanceAccessors(transforms);
+    const transforms = (entries || set.transforms.map((transform, index) => ({ index, transform }))).map((e) => e.transform);
+    const attributes = pushInstanceAccessors(transforms.length ? transforms : [IDENTITY_MATRIX]);
     const idx = nodesJson.length;
     const def = {
       name: set.name || `${node.name}:instances`,

@@ -535,16 +535,25 @@ function setSummary(set) {
 
 function reuseSummary(scene) {
   let draws = 0;
-  let uniqueMeshes = 0;
+  // Sharing is a property of the physical resource, not the IR mesh object: a
+  // material-only override legitimately produces two mesh objects that point at
+  // one resourceKey, so unique resources (and thus the expansion factor) are
+  // counted by key, never by mesh id.
+  const drawsByResource = new Map();
+  const keyOf = (mesh) => mesh.resourceKey || mesh.id;
   for (const mesh of scene.meshes) {
     let n = 0;
     for (const node of scene.nodes) if (node.mesh === mesh.id && node.visible && !node.instanceOf) n++;
     for (const set of scene.instanceSets) {
       if (set.rows.some((r) => r.mesh === mesh.id)) n += placementCount(scene, set);
     }
-    if (n > 0) uniqueMeshes++;
-    draws += n;
+    if (n > 0) {
+      const key = keyOf(mesh);
+      drawsByResource.set(key, (drawsByResource.get(key) || 0) + n);
+      draws += n;
+    }
   }
+  const uniqueMeshes = drawsByResource.size;
   return { draws, uniqueMeshes, expansionFactor: uniqueMeshes ? draws / uniqueMeshes : 0 };
 }
 

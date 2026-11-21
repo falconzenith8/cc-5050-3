@@ -71,12 +71,18 @@ export function createNode({ name = 'node', parent = null, translation = [0, 0, 
     sourcePrimType: null,
     visible: true,
     isPrototypeSource: false,
+    // Per-placement local overrides on top of the shared prototype. A material
+    // override never rewrites the prototype: the shared geometry and the other
+    // placements keep the prototype's material.
+    overrides: {
+      material: null,
+    },
   };
 }
 
 let meshCounter = 0;
 export function createMesh({ name = 'mesh', positions, normals = null, uvs = null, indices, material = null } = {}) {
-  return {
+  const mesh = {
     id: `m${++meshCounter}`,
     name,
     positions,
@@ -88,6 +94,12 @@ export function createMesh({ name = 'mesh', positions, normals = null, uvs = nul
     // Winding-facing normalisation applied during read, e.g. 'flipped'.
     windingFix: null,
   };
+  // Stable resource identity. Two mesh resources share one resourceKey exactly
+  // when their bytes on disk are the same source resource (one accessor / one
+  // prototype), even after a material-only override produces a second mesh IR
+  // object. A geometry edit mints a new key; an override does not.
+  mesh.resourceKey = mesh.id;
+  return mesh;
 }
 
 let materialCounter = 0;
@@ -130,6 +142,11 @@ export function createInstanceSet({ name = 'instances', mesh = null, material = 
     material,
     rows: rows || [{ mesh, matrix: null, }],
     transforms,
+    // Per-placement overrides, index-aligned with `transforms` for host forms
+    // (gltf-instancing / pointInstancer). Instanceable placements carry their
+    // own overrides on the placement node instead. Each entry is
+    // { material: materialId | null }.
+    transformOverrides: transforms.map(() => ({ material: null })),
     sourcePath,
     // 'instanceable' | 'pointInstancer' | 'gltf-instancing'
     kind,
@@ -222,10 +239,52 @@ export function resourceReuse(scene) {
   }
   return scene.meshes.map((mesh) => ({
     mesh: mesh.id,
+    resourceKey: mesh.resourceKey,
     name: mesh.name,
     draws: drawCount.get(mesh.id) || 0,
     vertices: mesh.positions.length / 3,
     triangles: triangleCount(mesh),
     shared: (drawCount.get(mesh.id) || 0) > 1,
   }));
+}
+
+/**
+ * Disk-level resource sharing: mesh IR objects grouped by `resourceKey`.
+ *
+ * A material-only override creates a second mesh object that keeps the same
+ * resourceKey, so the underlying geometry is still one resource. A real
+ * geometry copy mints a new key. Returns one row per physical resource with
+ * every IR mesh object that points at it.
+ */
+export function resourceGroups(scene) {
+  const groups = new Map();
+  for (const mesh of scene.meshes) {
+    const key = mesh.resourceKey || mesh.id;
+    if (!groups.has(key)) {
+      groups.set(key, { resourceKey: key, meshes: [], vertices: mesh.positions.length / 3, triangles: triangleCount(mesh) });
+    }
+    groups.get(key).meshes.push(mesh.id);
+  }
+  return [...groups.values()];
+}
+
+/** How many distinct physical geometry resources the scene stores on disk. */
+export function distinctResourceCount(scene) {
+  return new Set(scene.meshes.map((m) => m.resourceKey || m.id)).size;
+}
+
+/**
+ * Effective material drawn by a placement node: its local override if present,
+ * otherwise the prototype mesh's binding.
+ */
+export function effectiveMaterial(scene, node) {
+  if (node.overrides?.material) return node.overrides.material;
+  const mesh = node.mesh ? findMesh(scene, node.mesh) : null;
+  if (mesh) return mesh.material;
+  for (const setId of node.instanceSetIds || []) {
+    const set = scene.instanceSets.find((s) => s.id === setId);
+    const rowMesh = set ? findMesh(scene, set.rows[0]?.mesh) : null;
+    if (rowMesh) return rowMesh.material;
+  }
+  return null;
 }

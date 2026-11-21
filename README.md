@@ -47,11 +47,35 @@ report's `degradedMaterials`. A conversion never silently drops them.
 | double-sided | `material.doubleSided` | **`uniform bool doubleSided = 1` on the Mesh** (USD keeps it on the geometry, not the material) |
 | instance | `EXT_mesh_gpu_instancing` (one mesh + per-instance TRS accessors) | one `instanceable` prim per placement, all `prepend references`-ing one `class` prototype |
 | shared geometry | the single mesh referenced by the instancing node | the `class Xform` prototype under `/_Prototypes` |
+| per-placement material override | a second primitive reusing the same accessors with a different `material` | an `over`-only variant prototype that `prepend references` the base geometry and rebinds `material:binding` — no geometry bytes of its own |
 
 A shared mesh is written **once**. Our fixture converts to 7 draws over 3
 meshes (2.33× sharing); the report states this expansion factor and the verdict
 fails if it changes, so a conversion cannot flatten instances without being
 caught.
+
+### Shared geometry with per-instance material overrides
+
+A glTF `InstancedMesh` cannot carry a per-instance material, so the naive
+conversion either repaints every placement at once or copies the geometry for
+the one placement that differs. This build does neither: identity is keyed on a
+`resourceKey` (one physical resource — one POSITION accessor / one prototype),
+which is distinct from the IR mesh object id that a material-only override
+legitimately duplicates. The override fixture (`scenes/override.gltf` /
+`scenes/override.usda`) contains two same-named `Bracket` nodes under
+different parents, a mirrored parent layer, and one material-only override
+placement; on disk it has exactly one POSITION accessor (glTF) and one
+authored `points` block plus an `over Mesh` rebind (USD).
+
+`src/core/lineage.js` records, during every conversion, the reverse chain from
+an output object back to its source node (by stable id/path, never by name),
+geometry resource, parent transform chain and local override, and can disable
+one mapping layer at a time — `parent`, `transform`, `geometry`, `material`,
+`override` — each reversibly. Only the `geometry` layer mints a new
+`resourceKey`; every other layer leaves the shared bytes untouched.
+`src/core/edits.js` adds the command-based edit session whose tracker reports
+the three evidence categories separately: parent-layer changes, resource
+re-sharing, and true geometry copies.
 
 ### Why `instanceable` rather than `PointInstancer`
 
@@ -151,8 +175,18 @@ matrix.
 | loader | version | what it does in this build (measured) |
 |---|---|---|
 | three.js `GLTFLoader` | three r180 | `EXT_mesh_gpu_instancing` → one `InstancedMesh`; flips winding per object only |
-| `@openusd-wasm/three-loader` | 0.0.17 (pxr WASM) | expands **all** `instanceable` placements at correct worlds; applies `convertZUp` rotation; has no `metersPerUnit` field, so it never scales; no `PointInstancer` |
+| `@openusd-wasm/three-loader` | 0.0.17 (pxr WASM) | expands **all** `instanceable` placements at correct worlds; applies `convertZUp` rotation; has no `metersPerUnit` field, so it never scales; no `PointInstancer`; renders a class prototype's *base* material binding as an unnamed grey material, while stage-root and `over`-variant rebinds resolve |
 | `lightusd` | 1.0.0 (WASM) | draws only the **first** placement of each `instanceable` prototype (measured 1 of 4 panels, 1 of 2 posts); no `PointInstancer`; applies neither up-axis nor unit |
+
+The two real loaders are also driven headlessly against the override fixture
+by `npm run verify:override`
+(`tools/verify-override-loaders.mjs`), which asserts and records in
+`tests/e2e/artifacts/override-loader-evidence.json` that both loaders show
+isolated per-placement materials (the `BracketPaint` rebind resolves in each),
+build one position attribute for the single shared geometry, and produce the
+same world bounding box as the canonical IR. The openusd grey base-prototype
+binding is recorded there as a loader limit, not treated as a conversion
+failure.
 
 The page's **Independent loader check** table reports triangles, placement count
 and how many placements land at the IR's world positions, for whichever loaders
@@ -165,7 +199,8 @@ confirm its `XformCache` world matrices against the page's placements.
 
 ## 7. Using the page
 
-* **Source** format and file (glTF fixture, Y-up m USDA, Z-up cm USDA).
+* **Source** format and file (glTF fixture plus the override fixture, Y-up m
+  USDA, Z-up cm USDA, and the USDA override fixture).
 * **Convert & compare** runs the exchange and both loaders.
 * Left panel: expandable source hierarchy (instance/mirror badges, mesh and
   world position on select), instance sets with placement counts, materials with
@@ -180,7 +215,8 @@ confirm its `XformCache` world matrices against the page's placements.
 ```
 node cli/exchange.mjs scenes/exchange.gltf            # -> scenes/out-exchange/exchange.usda
 node cli/exchange.mjs scenes/exchange-zup.usda -o out # -> out/exchange-zup.gltf + report
-node --test tests/core/                               # core pipeline tests
+npm run test                                          # core pipeline tests
+npm run verify:override                               # two real loaders vs the override fixture
 node tests/e2e/run-e2e.mjs                            # drives the page, writes artifacts/
 ```
 
@@ -202,3 +238,13 @@ own non-uniform scale (X 0.4), four `instanceable` placements of one shared
 panel (one mirrored) and a `PointInstancer` of two shared posts. The USD files
 therefore cover **both** USD instance forms; the PointInstancer is the one the
 real loaders in this build do not expand, which the loader audit reports.
+
+`tools/build-override-scenes.mjs` (also run by `npm run scenes`) builds the
+material-override scenario into `scenes/override.gltf` and
+`scenes/override.usda`: two same-named `Bracket` nodes (one standalone under
+`HolderA`, one host of an instancing set under the mirrored `MirrorRig`),
+three draws over one physical geometry resource, and a single material-only
+override placement bound to `BracketPaint`. Its behaviour is covered by
+`tests/core/override.test.mjs` (isolation and sharing, both exchange
+directions, lineage reverse-lookup, layer disable/undo, reparent→undo→clear
+override, and the first-identity-confusion characterization).

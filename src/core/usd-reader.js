@@ -65,6 +65,12 @@ export function readUsda(text, { sourceName = 'scene.usda' } = {}) {
   const twoSided = new Map();
   const meshes = new Map();
   const instanceSets = new Map();
+  // Mesh prims that carry byte-identical geometry are one physical resource,
+  // even when authored at different prim paths (e.g. a standalone mesh that
+  // duplicates a prototype's geometry). Keyed on a cheap content signature so
+  // material-only differences never collapse the resource, and genuinely
+  // different geometry never shares a key.
+  const resourceKeyBySignature = new Map();
 
   // ---- transforms --------------------------------------------------------
   function localMatrix(spec) {
@@ -269,8 +275,28 @@ export function readUsda(text, { sourceName = 'scene.usda' } = {}) {
       }
     }
     meshes.set(path, mesh);
+    mesh.resourceKey = sharedResourceKey(mesh);
     scene.meshes.push(mesh);
     return mesh;
+  }
+
+  /**
+   * Stable resource key for byte-identical geometry. A material-only difference
+   * changes the binding, not the positions/indices, so two prims with the same
+   * signature share one key; a geometry edit changes the signature and the key.
+   */
+  function sharedResourceKey(mesh) {
+    const signature = geometrySignature(mesh);
+    if (!resourceKeyBySignature.has(signature)) {
+      resourceKeyBySignature.set(signature, `key-usd-geometry-${resourceKeyBySignature.size}`);
+    }
+    return resourceKeyBySignature.get(signature);
+  }
+
+  function geometrySignature(mesh) {
+    const pos = Array.from(mesh.positions).map((v) => Math.round(v * 1e7));
+    const idx = mesh.indices ? Array.from(mesh.indices) : [];
+    return `${pos.length}:${pos.join(',')}|${idx.join(',')}`;
   }
 
   function twoSidedVariant(material, basePath) {
@@ -299,6 +325,40 @@ export function readUsda(text, { sourceName = 'scene.usda' } = {}) {
   }
 
   // ---- prototypes --------------------------------------------------------
+  /**
+   * Resolve a referenced prototype, following one level of material-override
+   * variant. A variant class references the base geometry prototype and only
+   * re-binds its Mesh through an `over`; the geometry rows therefore come from
+   * the base, so an override placement shares the exact same geometry identity
+   * as its unmodified siblings. The override is returned separately, never
+   * folded into the mesh resource.
+   */
+  function resolvePrototype(targetSpec, ref) {
+    const overBinding = findOverrideBinding(targetSpec);
+    if (!overBinding) return { rows: prototypeRows(targetSpec, ref), basePath: ref, overrideMaterialId: null };
+    const baseRef = refPath(targetSpec.metadata.references);
+    const baseSpec = baseRef ? byPath.get(baseRef) : null;
+    if (!baseSpec) {
+      warnings.push({ message: `${ref}: material-override variant references unknown base '${baseRef}'; read without override`, layer: sourceName });
+      return { rows: prototypeRows(targetSpec, ref), basePath: ref, overrideMaterialId: null };
+    }
+    const bound = byPath.get(overBinding);
+    const materialId = bound ? materialFor(bound, overBinding).id : null;
+    return {
+      rows: prototypeRows(baseSpec, baseRef),
+      basePath: baseRef,
+      overrideMaterialId: materialId,
+      variantPath: ref,
+    };
+  }
+
+  /** Material binding path declared on an `over Mesh` child, if this spec is an override variant. */
+  function findOverrideBinding(spec) {
+    const overMesh = spec.prims.find((p) => p.kind === 'over' && GEOM_TYPES.has(p.typeName));
+    const binding = overMesh?.props['material:binding']?.value;
+    return binding && typeof binding === 'object' ? binding.path ?? null : null;
+  }
+
   /**
    * Geometry rows of a prototype rooted at `rootSpec`. Each row keeps its
    * transform relative to the prototype root, so one authored mesh serves
@@ -369,6 +429,10 @@ export function readUsda(text, { sourceName = 'scene.usda' } = {}) {
     const path = `${prefix}/${spec.name}`;
     const className = spec.kind === 'class';
 
+    // An `over` only carries opinions about a referenced prim; it never
+    // declares geometry of its own. Its material binding is consumed by
+    // resolvePrototype, so it is not a drawable node in the scene tree.
+    if (spec.kind === 'over') return;
     if (spec.typeName === 'PointInstancer') {
       readPointInstancer(spec, path, parentNode);
       return;
@@ -379,8 +443,13 @@ export function readUsda(text, { sourceName = 'scene.usda' } = {}) {
     }
     if (className) {
       // Reusable prototype libraries are not drawable content. Their meshes
-      // are reached through instance-set rows instead.
-      for (const child of spec.prims) visitPrim(child, parentNode, path, true);
+      // are reached through instance-set rows instead. `over` children of an
+      // override variant only re-bind a material and carry no geometry of
+      // their own, so they are never visited as drawable prims.
+      for (const child of spec.prims) {
+        if (child.kind === 'over') continue;
+        visitPrim(child, parentNode, path, true);
+      }
       return;
     }
     if (GEOM_TYPES.has(spec.typeName)) {
@@ -450,19 +519,27 @@ export function readUsda(text, { sourceName = 'scene.usda' } = {}) {
       for (const child of spec.prims) visitPrim(child, node, path, false);
       return;
     }
-    const rows = prototypeRows(targetSpec, ref);
+    const { rows, basePath, overrideMaterialId, variantPath } = resolvePrototype(targetSpec, ref);
     if (rows.length === 0) {
       warnings.push({ message: `instance ${path}: prototype '${ref}' contains no drawable geometry`, layer: sourceName });
       return;
     }
     const node = makeNode(spec, parentNode, path);
     node.sourcePrimType = 'instanceable';
-    node.instanceOf = ref;
+    node.instanceOf = basePath;
+    node.prototypeVariant = variantPath || null;
     node.instanceSetIds = [];
-    const sets = instanceSetForRows(rows, ref, path, 'instanceable');
+    const sets = instanceSetForRows(rows, basePath, path, 'instanceable');
     for (const set of sets) {
       set.sourcePaths.push(path);
       if (!node.instanceSetIds.includes(set.id)) node.instanceSetIds.push(set.id);
+      // The material override is a local opinion on this placement only. The
+      // instance set (and its geometry row) is shared with every sibling, so
+      // changing this material cannot change the others.
+      if (overrideMaterialId) {
+        node.overrides = node.overrides || { material: null };
+        node.overrides.material = overrideMaterialId;
+      }
       for (const row of set.rows) {
         if (determinant3(multiply(node.matrix, row.matrix || IDENTITY)) < 0) set.mirroredCount++;
       }
@@ -547,9 +624,13 @@ export function readUsda(text, { sourceName = 'scene.usda' } = {}) {
       (c) => c.typeName === 'Xform' && c.metadata?.instanceable === true,
     );
     if (instChildren.length === 0 || instChildren.length !== spec.prims.length) return false;
-    const refs = new Set(instChildren.map((c) => refPath(c.metadata.references)));
-    if (refs.size !== 1) return false;
-    const ref = [...refs][0];
+    // Placements may reference the base prototype or an `over` material variant
+    // of it; all of them still share one geometry resource, so they collapse
+    // into one set, carrying any material difference as a per-transform
+    // override rather than as different geometry.
+    const baseRefs = new Set(instChildren.map((c) => baseReferencePath(c)));
+    if (baseRefs.size !== 1) return false;
+    const ref = [...baseRefs][0];
     const targetSpec = ref ? byPath.get(ref) : null;
     if (!targetSpec) return false;
     const rows = prototypeRows(targetSpec, ref);
@@ -557,18 +638,30 @@ export function readUsda(text, { sourceName = 'scene.usda' } = {}) {
 
     const created = [];
     const transforms = [];
+    const transformOverrides = [];
     for (const child of instChildren) {
-      const world = multiply(node.matrix, localMatrix(child));
+      // Set transforms are placement locals relative to the host; the host's
+      // own world is applied at draw time (world = hostWorld * local). Baking
+      // the host matrix in here would double-apply it on re-read.
+      const local = localMatrix(child);
       const childNode = createNode({ name: child.name });
       childNode.parent = node.id;
       childNode.sourcePath = `${path}/${child.name}`;
       childNode.sourcePrimType = 'instanceable';
       childNode.instanceOf = ref;
       childNode.instanceSetIds = [];
-      applyMatrix(childNode, world);
+      const variantRef = refPath(child.metadata.references);
+      const variantSpec = variantRef ? byPath.get(variantRef) : null;
+      const binding = variantSpec ? findOverrideBinding(variantSpec) : null;
+      if (binding && byPath.has(binding)) {
+        childNode.overrides = { material: materialFor(byPath.get(binding), binding).id };
+        childNode.prototypeVariant = variantRef;
+      }
+      applyMatrix(childNode, local);
       scene.nodes.push(childNode);
       created.push(childNode);
-      transforms.push(multiply(world, rows[0].matrix || IDENTITY));
+      transforms.push(multiply(local, rows[0].matrix || IDENTITY));
+      transformOverrides.push({ material: childNode.overrides?.material || null });
     }
 
     const set = createInstanceSet({
@@ -579,6 +672,7 @@ export function readUsda(text, { sourceName = 'scene.usda' } = {}) {
       sourcePath: path,
       kind: 'gltf-instancing',
     });
+    set.transformOverrides = transformOverrides;
     const mesh = scene.meshes.find((m) => m.id === rows[0].mesh);
     set.material = mesh?.material ?? null;
     set.prototypePath = ref;
@@ -595,6 +689,16 @@ export function readUsda(text, { sourceName = 'scene.usda' } = {}) {
     node.instanceSetIds = [set.id];
     node.pointInstancerCount = transforms.length;
     return true;
+  }
+
+  /** Base geometry prototype behind a placement, unwrapping one material variant. */
+  function baseReferencePath(placementSpec) {
+    const direct = refPath(placementSpec.metadata.references);
+    const directSpec = direct ? byPath.get(direct) : null;
+    if (directSpec && findOverrideBinding(directSpec)) {
+      return refPath(directSpec.metadata.references) || direct;
+    }
+    return direct;
   }
 
   return { scene, warnings, sourceName };

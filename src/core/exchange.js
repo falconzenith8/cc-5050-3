@@ -11,6 +11,7 @@ import { writeUsda, rootFix } from './usda-writer.js';
 import { buildReport } from './report.js';
 import { compareScenes } from './compare.js';
 import { serializeScene } from './serialize.js';
+import { buildConversionLineage } from './lineage-build.js';
 
 export const CONVERSIONS = Object.freeze({
   'gltf->usda': { source: 'gltf', target: 'usda', label: 'glTF 2.0 -> USDA' },
@@ -104,6 +105,11 @@ export function exchange(sourceFormat, file, opts = {}) {
     },
   });
 
+  // Reverse-lookup lineage from every re-read target object back to its source
+  // node, geometry resource, parent chain and local override. It is built from
+  // the real output file (targetScene), so the links are evidence, not claims.
+  const { lineage, summary: lineageSummary } = buildConversionLineage(sourceScene, targetScene);
+
   return {
     sourceFormat,
     targetFormat,
@@ -114,6 +120,8 @@ export function exchange(sourceFormat, file, opts = {}) {
     targetFrame: { upAxis: targetUpAxis, metersPerUnit: targetMetersPerUnit },
     comparison,
     report,
+    lineage,
+    lineageSummary,
     sourceSerialized: serializeScene(sourceScene),
     targetSerialized: serializeScene(targetScene),
   };
